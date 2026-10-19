@@ -1,28 +1,27 @@
-const { graphGetBeta } = require('../../graph/graphClient');
+const { graphGet } = require('../../graph/graphClient');
 const logger = require('../../logger');
 
-// Requires: RecordsManagement.Read.All (Application)
-// Lists retention labels from Microsoft Purview compliance API (beta).
-// Retention labels define how long content is kept and whether deletion is blocked.
+// Documented API: GET /security/labels/retentionLabels (v1.0).
+// https://learn.microsoft.com/en-us/graph/api/security-labelsroot-list-retentionlabel?view=graph-rest-1.0
+// Delegated RecordsManagement.Read.All only. Application permission is not supported.
+// This product uses client_credentials, so a 401/403/500 is treated as unavailable.
 
 async function collectRetention(tenantId) {
   logger.info({ event: 'collector_start', collector: 'retention', tenantId });
 
   let labels;
   try {
-    const data = await graphGetBeta(
-      tenantId,
-      '/security/informationProtection/retentionLabels'
-    );
+    const data = await graphGet(tenantId, '/security/labels/retentionLabels');
     labels = data.value ?? [];
   } catch (err) {
-    if (err.response?.status === 403 || err.response?.status === 404) {
-      logger.warn({ event: 'collector_unavailable', collector: 'retention', tenantId });
+    const status = err.response?.status;
+    if (status === 401 || status === 403 || status === 404 || status === 500) {
+      logger.warn({ event: 'collector_unavailable', collector: 'retentionLabels', tenantId, status });
       return {
-        collector: 'retention',
-        score: 0,
+        collector: 'retentionLabels',
+        score: null,
         unavailable: true,
-        reason: 'RecordsManagement.Read.All required for retention label enumeration.',
+        reason: 'GET /security/labels/retentionLabels não aceita permissão de aplicação. O assessment usa client_credentials.',
       };
     }
     throw err;
@@ -50,7 +49,7 @@ async function collectRetention(tenantId) {
   });
 
   return {
-    collector: 'retention',
+    collector: 'retentionLabels',
     score,
     summary: {
       totalLabels,

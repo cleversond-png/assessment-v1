@@ -1,11 +1,9 @@
 const { graphGet } = require('../../graph/graphClient');
 const logger = require('../../logger');
 
-// DLP policy configuration (Get-DlpCompliancePolicy) is NOT exposed via Graph API.
-// Proxy approach: check /security/alerts_v2 for recent DLP alerts.
-// If DLP alerts exist → policies are configured and actively monitoring.
-// Requires: SecurityAlert.Read.All (Application).
-// Copilot-specific workload coverage still cannot be confirmed remotely.
+// Purview DLP policies are not listable with a Graph application permission.
+// /security/alerts_v2 is kept only as context. The result stays unavailable
+// so alert presence or absence does not change the domain score.
 
 const ALERT_WINDOW_DAYS = 30;
 
@@ -33,31 +31,21 @@ async function collectDlp(tenantId) {
     }
   }
 
-  if (permissionMissing) {
-    logger.info({ event: 'collector_unavailable', collector: 'dlp', tenantId, reason: 'SecurityAlert.Read.All ausente' });
-    return {
-      collector: 'dlp',
-      score: 0,
-      unavailable: true,
-      proxy: true,
-      reason: 'Permissão SecurityAlert.Read.All ausente — DLP inferido por alertas não disponível. Verificação manual via Microsoft Purview.',
-    };
-  }
+  const alertCount = permissionMissing ? null : dlpAlerts.length;
+  const activeAlerts = permissionMissing ? null : dlpAlerts.filter((a) => a.status !== 'resolved').length;
 
-  const alertCount = dlpAlerts.length;
-  const activeAlerts = dlpAlerts.filter((a) => a.status !== 'resolved').length;
-  const hasActivePolicy = alertCount > 0;
-
-  // score 3 = DLP evidenciado por alertas recentes (proxy positivo)
-  // score 1 = sem alertas no período (DLP pode estar inativo ou sem violações)
-  const score = hasActivePolicy ? 3 : 1;
-
-  logger.info({ event: 'collector_done', collector: 'dlp', tenantId, alertCount, activeAlerts, score });
+  // Graph não lista políticas DLP do Purview com permissão de aplicação.
+  // Alertas ficam no summary e não entram no score.
+  logger.info({ event: 'collector_done', collector: 'dlp', tenantId, alertCount, activeAlerts, scored: false });
 
   return {
     collector: 'dlp',
-    score,
+    score: null,
+    unavailable: true,
     proxy: true,
+    reason: permissionMissing
+      ? 'Permissão SecurityAlert.Read.All ausente. Políticas DLP do Purview não são listáveis via Graph.'
+      : 'Políticas DLP do Purview não são listáveis via Graph. Alertas recentes não comprovam a política.',
     summary: {
       alertsInPeriod: alertCount,
       activeAlerts,

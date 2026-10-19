@@ -50,10 +50,12 @@ const COLLECTOR_META = {
     description: 'Rótulos de sensibilidade publicados (ex: Público, Confidencial). Sem labels, o Copilot não distingue dados sigilosos de públicos ao gerar respostas.' },
   audit:             { label: 'Unified Audit Log',        weight: 3, requires: 'AuditLog.Read.All',
     description: 'Unified Audit Log ativo com eventos recentes. Sem auditoria, não é possível rastrear o que o Copilot acessou ou investigar incidentes de vazamento de dados.' },
-  dlp:               { label: 'DLP Policies',             weight: 2, requires: 'SecurityAlert.Read.All (proxy via alertas)',
-    description: 'Políticas de prevenção de perda de dados que detectam e bloqueiam movimentação de CPF, PCI ou PII. Verificação indireta via alertas de segurança (proxy).' },
-  retention:         { label: 'Retention Policies',       weight: 2, requires: 'Indisponível via Graph',
+  dlp:               { label: 'DLP Policies',             weight: null, informational: true, requires: 'Purview (não listável via Graph)',
+    description: 'Políticas DLP do Purview não são listáveis com permissão de aplicação. Alertas de DLP aparecem só como contexto e não entram no score.' },
+  retentionPolicies: { label: 'Retention Policies',       weight: 2, requires: 'RecordsManagement.Read.All',
     description: 'Políticas que definem por quanto tempo dados são mantidos antes de serem arquivados ou excluídos — fundamento para compliance com LGPD, SOX e similares.' },
+  retentionLabels:   { label: 'Retention Labels',         weight: 2, requires: 'Delegada RecordsManagement.Read.All (aplicação não suportada)',
+    description: 'Rótulos de retenção aplicados a conteúdo. O Graph só documenta leitura com permissão delegada; com client_credentials o coletor fica indisponível e não altera o score.' },
   // Email Security
   spf:               { label: 'SPF',   weight: 2, requires: 'DNS lookup',
     description: 'Registro DNS que lista quais servidores estão autorizados a enviar email em nome do domínio. Sem SPF, qualquer servidor pode se passar pelo seu domínio.' },
@@ -117,6 +119,11 @@ function collectorMetric(id, data) {
       case 'legacyAuth': return { value: 'Não verificado', sub: 'sign-in logs indisponíveis' }
       case 'breakGlass': return { value: 'Não configurado', sub: 'sem evidência coletada' }
       case 'riskySignIns': return { value: 'Não configurado', sub: 'Identity Risk Events' }
+      case 'dlp': return {
+        value: typeof s.alertsInPeriod === 'number' ? String(s.alertsInPeriod) : '—',
+        sub: typeof s.alertsInPeriod === 'number' ? 'alertas em 30d; política não lida' : 'política DLP fora do Graph',
+      }
+      case 'retentionLabels': return { value: '—', sub: 'sem permissão de aplicação' }
       default: return { value: '—', sub: 'indisponível' }
     }
   }
@@ -145,8 +152,12 @@ function collectorMetric(id, data) {
     case 'storage': return { value: `${s.utilizationPercent ?? '?'}%`, sub: `${formatGB(s.totalStorageGB)} de ${formatGB(s.totalAllocatedGB)}` }
     case 'sensitivityLabels': return { value: `${s.totalLabels ?? 0}`, sub: 'labels publicadas' }
     case 'audit': return { value: s.recentEventsFound > 0 ? 'Ativo' : 'Inativo', sub: 'últimos 30 dias' }
-    case 'dlp': return { value: '—', sub: 'fora do Graph API' }
-    case 'retention': return { value: '—', sub: 'fora do Graph API' }
+    case 'dlp': return {
+      value: typeof s.alertsInPeriod === 'number' ? String(s.alertsInPeriod) : '—',
+      sub: 'alertas; política não lida',
+    }
+    case 'retentionPolicies': return { value: `${s.totalPolicies ?? 0}`, sub: 'políticas de retenção' }
+    case 'retentionLabels': return { value: `${s.totalLabels ?? 0}`, sub: 'rótulos de retenção' }
     case 'spf': return { value: s.present ? 'Presente' : 'Ausente', sub: s.qualifier || '—' }
     case 'dmarc': return { value: s.present ? 'Presente' : 'Ausente', sub: `p=${s.policy || '?'}` }
     case 'dkim':                 return { value: s.configured ? 'Configurado' : 'Ausente', sub: 'Exchange Online' }
@@ -178,6 +189,10 @@ function collectorDetail(id, data, allCollectors = {}) {
         return 'Nenhuma evidência de conta break-glass configurada foi coletada. Trate como não configurado até validar ao menos 2 contas cloud-only de emergência excluídas das políticas de Conditional Access.'
       case 'riskySignIns':
         return 'As detecções de entradas arriscadas não estão disponíveis ou não foram consentidas. Confirme IdentityRiskEvent.Read.All e licenciamento Entra P1/P2 para coletar este relatório.'
+      case 'dlp':
+        return data.reason || 'Políticas DLP do Purview não são listáveis via Microsoft Graph com permissão de aplicação.'
+      case 'retentionLabels':
+        return data.reason || 'Rótulos de retenção não podem ser lidos com client_credentials.'
       default:
         return 'Recurso indisponível — verifique a licença ou a permissão necessária.'
     }

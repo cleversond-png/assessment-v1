@@ -2,6 +2,7 @@ const { collectSensitivityLabels } = require('./sensitivityLabelsCollector');
 const { collectAudit } = require('./auditCollector');
 const { collectDlp } = require('./dlpCollector');
 const { collectRetentionPolicies } = require('./retentionPoliciesCollector');
+const { collectRetention } = require('./retentionCollector');
 const { collectCopilotExtensions } = require('./copilotExtensionsCollector');
 const logger = require('../../logger');
 
@@ -13,6 +14,7 @@ const COLLECTOR_WEIGHTS = {
   audit: 4,
   dlp: 3,
   retentionPolicies: 2,
+  retentionLabels: 2,
   copilotExtensions: 1,
 };
 
@@ -24,6 +26,7 @@ async function runGovernanceAssessment(tenantId) {
     { name: 'audit',              fn: () => collectAudit(tenantId) },
     { name: 'dlp',                fn: () => collectDlp(tenantId) },
     { name: 'retentionPolicies',  fn: () => collectRetentionPolicies(tenantId) },
+    { name: 'retentionLabels',    fn: () => collectRetention(tenantId) },
     { name: 'copilotExtensions',  fn: () => collectCopilotExtensions(tenantId) },
   ];
 
@@ -41,19 +44,7 @@ async function runGovernanceAssessment(tenantId) {
     }
   }));
 
-  // Use usedWeight denominator: unavailable collectors do not penalise the score.
-  let weightedSum = 0;
-  let usedWeight = 0;
-  for (const [name, weight] of Object.entries(COLLECTOR_WEIGHTS)) {
-    const r = results[name];
-    if (r && typeof r.score === 'number' && !r.unavailable) {
-      weightedSum += r.score * weight;
-      usedWeight += weight;
-    }
-  }
-  const domainScore = usedWeight > 0
-    ? Math.round((weightedSum / usedWeight) * 10) / 10
-    : 0;
+  const domainScore = calculateGovernanceScore(results);
 
   logger.info({ event: 'assessment_done', domain: 'governance', tenantId, domainScore });
 
@@ -67,4 +58,20 @@ async function runGovernanceAssessment(tenantId) {
   };
 }
 
-module.exports = { runGovernanceAssessment };
+function calculateGovernanceScore(results) {
+  // Unavailable collectors, including the DLP alert proxy, do not penalise the score.
+  let weightedSum = 0;
+  let usedWeight = 0;
+  for (const [name, weight] of Object.entries(COLLECTOR_WEIGHTS)) {
+    const r = results[name];
+    if (r && typeof r.score === 'number' && !r.unavailable) {
+      weightedSum += r.score * weight;
+      usedWeight += weight;
+    }
+  }
+  return usedWeight > 0
+    ? Math.round((weightedSum / usedWeight) * 10) / 10
+    : 0;
+}
+
+module.exports = { runGovernanceAssessment, calculateGovernanceScore };
