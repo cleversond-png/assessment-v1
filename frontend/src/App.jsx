@@ -408,7 +408,7 @@ export default function App() {
             onOpenRec={() => setScreen('recommendations')}
           />
         )
-      case 'baseline':
+      case 'zeroTrust':
         return (
           <ZeroTrustScreen
             result={result}

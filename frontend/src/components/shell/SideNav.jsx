@@ -67,6 +67,7 @@ export default function SideNav({ active, onSelect, result }) {
     {
       group: 'Insights',
       items: [
+        { id: 'zeroTrust', icon: 'key-round', label: 'Zero Trust' },
         { id: 'recommendations', icon: 'list-checks', label: 'Recomendações', badge: recCount ? String(recCount) : null },
         { id: 'history', icon: 'history', label: 'Histórico' },
         { id: 'logs', icon: 'scroll-text', label: 'Logs de execução' },
