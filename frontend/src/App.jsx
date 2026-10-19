@@ -15,7 +15,7 @@ import EnvironmentScreen from './components/screens/EnvironmentScreen.jsx'
 const DOMAIN_IDS = ['baseline', 'entraId', 'sharePoint', 'governance', 'emailSecurity', 'teams']
 
 function LoginScreen({ onLogin }) {
-  const [form, setForm] = useState({ username: 'Admin.Assessment', password: '' })
+  const [form, setForm] = useState({ username: '', password: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
