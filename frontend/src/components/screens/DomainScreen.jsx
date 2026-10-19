@@ -43,7 +43,7 @@ const COLLECTOR_META = {
     description: 'Sites sem atividade nos últimos 180 dias. Conteúdo obsoleto pode ser citado pelo Copilot como informação atual, gerando respostas imprecisas.' },
   files:             { label: 'Arquivos (grandes/dupl)', weight: 2, requires: 'Reports.Read.All, Sites.Read.All, Files.Read.All',
     description: 'Arquivos excepcionalmente grandes (>100 MB) que impactam performance de sincronização e podem indicar repositórios de dados não gerenciados.' },
-  storage:           { label: 'Armazenamento',           weight: 2, requires: 'Sites.Read.All',
+  storage:           { label: 'Armazenamento',           weight: 2, requires: 'Reports.Read.All, Sites.Read.All',
     description: 'Percentual de utilização do armazenamento SharePoint total alocado para o tenant.' },
   // Governance
   sensitivityLabels: { label: 'Sensitivity Labels',      weight: 3, requires: 'InformationProtectionPolicy.Read.All',
@@ -668,7 +668,7 @@ function StorageDetailContent({ data }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div>
-        <SectionHeader color="var(--brand-500)" label="Utilização de armazenamento (sites amostrados)" />
+        <SectionHeader color="var(--brand-500)" label={s.rankingSource === 'report' ? 'Utilização de armazenamento (sites SharePoint do relatório)' : 'Utilização de armazenamento (sites amostrados)'} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
           <span className="t-sm" style={{ fontWeight: 500 }}>
             <span style={{ fontSize: 22, fontWeight: 700, lineHeight: 1, color: utilizationColor }}>{formatGB(s.totalStorageGB)}</span>
@@ -691,7 +691,7 @@ function StorageDetailContent({ data }) {
               <div style={{ width: `${concentrationPct}%`, height: '100%', background: concentrationColor, borderRadius: 5 }} />
             </div>
             <div className="t-xs" style={{ color: 'var(--fg-3)', marginTop: 3 }}>
-              Os {s.top20PercentSiteCount ?? '?'} maiores sites concentram {concentrationPct}% do armazenamento amostrado
+              Os {s.top20PercentSiteCount ?? '?'} maiores sites concentram {concentrationPct}% do armazenamento {s.rankingSource === 'report' ? 'SharePoint' : 'amostrado'}
             </div>
           </div>
         )}
@@ -699,7 +699,11 @@ function StorageDetailContent({ data }) {
 
       <div>
         <SectionHeader color="#D97706" label="Status de cota dos sites amostrados" />
-        {[
+        {s.sitesNearing == null ? (
+          <div className="t-xs" style={{ color: 'var(--fg-3)' }}>
+            O relatório de uso não informa quais sites estão perto do limite da cota.
+          </div>
+        ) : [
           { label: 'Saudáveis',           value: healthy,            color: '#16A34A' },
           { label: 'Próximos do limite',  value: s.sitesNearing ?? 0, color: '#D97706' },
           { label: 'Críticos / Excedidos',value: s.sitesCritical ?? 0,color: '#DC2626' },

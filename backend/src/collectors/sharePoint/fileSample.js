@@ -53,10 +53,14 @@ function parseSiteUsageCsv(csv) {
   if (urlCol < 0 || storageCol < 0) return null;
   const deletedCol = col('is deleted');
   const filesCol = col('file count');
+  const allocatedCol = col('storage allocated (byte)');
   return table.slice(1).map((cells) => ({
     siteUrl: (cells[urlCol] || '').trim(),
     isDeleted: deletedCol >= 0 ? (cells[deletedCol] || '').trim() : '',
     storageUsed: Number(String(cells[storageCol] || '').replace(/,/g, '')) || 0,
+    storageAllocated: allocatedCol >= 0
+      ? (Number(String(cells[allocatedCol] || '').replace(/,/g, '')) || 0)
+      : 0,
     fileCount: filesCol >= 0 ? (Number(cells[filesCol]) || 0) : 0,
   }));
 }
@@ -146,6 +150,8 @@ function buildSearchCoverage(meta) {
 module.exports = {
   REPORT_SITE_LIMIT,
   parseSiteUsageCsv,
+  isDeleted,
+  isPersonalOneDrive,
   selectSitesForFileSample,
   sitePathFromUrl,
   buildReportCoverage,
