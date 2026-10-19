@@ -7,6 +7,8 @@ backend/.env
 # Assessment data — tenant-specific, stays local
 backend/data/results/
 backend/data/consented_tenants.json
+backend/data/companies.json
+backend/data/
 
 # Frontend build output
 frontend/dist/
