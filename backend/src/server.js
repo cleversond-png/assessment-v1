@@ -9,6 +9,8 @@ const environmentRoutes = require('./routes/environmentRoutes');
 const portalAuth = require('./auth/portalAuth');
 const { acquireTokenForTenant } = require('./auth/authService');
 const consentStore = require('./store/consentStore');
+const resultsStore = require('./store/resultsStore');
+const jobStore = require('./store/jobStore');
 const logger = require('./logger');
 
 validateConfig();
@@ -49,6 +51,9 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 if (require.main === module) {
+  resultsStore.purgeExpired();
+  jobStore.markInterrupted();
+
   app.listen(serverConfig.port, async () => {
     logger.info({ event: 'server_started', port: serverConfig.port });
 

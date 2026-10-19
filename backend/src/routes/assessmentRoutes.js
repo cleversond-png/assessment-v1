@@ -12,12 +12,10 @@ const tokenStore = require('../auth/tokenStore');
 const consentStore = require('../store/consentStore');
 const { acquireTokenForTenant } = require('../auth/authService');
 const resultsStore = require('../store/resultsStore');
+const jobStore = require('../store/jobStore');
 const logger = require('../logger');
 
 const router = express.Router();
-
-// In-memory job tracker: tenantId → { status, domains, startedAt, completedAt?, error? }
-const jobs = new Map();
 
 // Mapa collector → permissão Graph. Quando um collector retorna unavailable,
 // inferimos qual permissão precisa ser adicionada à App Registration / consent.
@@ -55,7 +53,7 @@ function requireConsent(req, res, next) {
 }
 
 async function runAssessmentBackground(tenantId) {
-  const job = jobs.get(tenantId);
+  const job = jobStore.get(tenantId);
   logger.info({ event: 'full_assessment_started', tenantId });
 
   try {
@@ -73,9 +71,11 @@ async function runAssessmentBackground(tenantId) {
       try {
         domainResults[key] = await fn();
         job.domains[key] = 'done';
+        jobStore.set(tenantId, job);
       } catch (err) {
         domainResults[key] = { error: err.response?.data?.error?.message || err.message };
         job.domains[key] = 'error';
+        jobStore.set(tenantId, job);
         logger.error({ event: 'domain_error', domain: key, tenantId, error: err.message });
       }
     }));
@@ -119,10 +119,12 @@ async function runAssessmentBackground(tenantId) {
     resultsStore.save(tenantId, result);
     job.status = 'completed';
     job.completedAt = new Date().toISOString();
+    jobStore.set(tenantId, job);
     logger.info({ event: 'full_assessment_completed', tenantId, overallScore });
   } catch (err) {
     job.status = 'failed';
     job.error = err.message;
+    jobStore.set(tenantId, job);
     logger.error({ event: 'assessment_failed', tenantId, error: err.message });
   }
 }
@@ -132,7 +134,7 @@ router.post('/start', requireConsent, async (req, res) => {
   const { tenantId } = req.body;
 
   // If already running, return current status (don't start a second job)
-  const existing = jobs.get(tenantId);
+  const existing = jobStore.get(tenantId);
   if (existing?.status === 'running') {
     return res.json({ status: 'running', tenantId });
   }
@@ -152,7 +154,7 @@ router.post('/start', requireConsent, async (req, res) => {
   }
 
   const job = { status: 'running', domains: {}, startedAt: new Date().toISOString() };
-  jobs.set(tenantId, job);
+  jobStore.set(tenantId, job);
 
   runAssessmentBackground(tenantId); // fire and forget — no await
   logger.info({ event: 'assessment_queued', tenantId });
@@ -162,7 +164,7 @@ router.post('/start', requireConsent, async (req, res) => {
 // GET /assessment/jobs/:tenantId — polling endpoint for async assessment progress
 router.get('/jobs/:tenantId', (req, res) => {
   const { tenantId } = req.params;
-  const job = jobs.get(tenantId);
+  const job = jobStore.get(tenantId);
   if (job) return res.json(job);
 
   // No in-memory job — check disk (e.g. server restarted after a completed assessment)
@@ -210,6 +212,11 @@ router.post('/governance', requireConsent, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /assessment/results/:tenantId/history — série dos assessments ainda dentro da retenção
+router.get('/results/:tenantId/history', (req, res) => {
+  res.json(resultsStore.listHistory(req.params.tenantId));
 });
 
 // GET /assessment/results/:tenantId/pdf — gera e devolve o PDF do último assessment

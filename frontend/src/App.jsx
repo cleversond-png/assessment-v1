@@ -422,13 +422,30 @@ export default function App() {
         return <CopilotReadinessScreen result={result} />
       case 'history':
         return <HistoryScreen result={result} />
-      case 'logs':
+      case 'logs': {
+        const errors = result?.assessmentErrors || {}
+        const rows = Object.entries(errors).flatMap(([domain, detail]) => (
+          detail && typeof detail === 'object'
+            ? Object.entries(detail).map(([name, message]) => ({ domain, name, message: String(message) }))
+            : []
+        ))
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="t-h1">Logs de execução</div>
-            <div className="t-sm">Em breve — esta seção mostrará os logs estruturados de cada collector por assessment.</div>
+            <div className="t-sm" style={{ color: 'var(--fg-3)' }}>
+              Erros registrados no assessment aberto. O log completo do processo continua no stdout do servidor.
+            </div>
+            {rows.length === 0 ? (
+              <div className="t-sm">Nenhum erro de collector neste assessment.</div>
+            ) : rows.map((row) => (
+              <div key={`${row.domain}-${row.name}`} style={{ padding: '12px 14px', border: '1px solid var(--border-1)', borderRadius: 'var(--r-md)', background: 'var(--bg-card)' }}>
+                <div className="t-xs" style={{ color: 'var(--fg-3)' }}>{row.domain} · {row.name}</div>
+                <div className="t-sm" style={{ marginTop: 4 }}>{row.message}</div>
+              </div>
+            ))}
           </div>
         )
+      }
       case 'tenants':
         return <SavedReportsList reports={savedReports} onLoad={loadResult} activeId={result?.tenantId} />
       case 'consent':

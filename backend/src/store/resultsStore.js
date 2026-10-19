@@ -5,6 +5,7 @@ const logger = require('../logger');
 const RESULTS_DIR = process.env.DATA_DIR
   ? path.join(process.env.DATA_DIR, 'results')
   : path.resolve(__dirname, '../../data/results');
+const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function ensureDir() {
   if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
@@ -17,7 +18,50 @@ function hasCollectorData(result) {
   );
 }
 
+function purgeExpired(now = Date.now()) {
+  ensureDir();
+  let removed = 0;
+  for (const file of fs.readdirSync(RESULTS_DIR)) {
+    if (!file.endsWith('.json')) continue;
+    const full = path.join(RESULTS_DIR, file);
+    if (now - fs.statSync(full).mtimeMs > RETENTION_MS) {
+      fs.unlinkSync(full);
+      removed += 1;
+    }
+  }
+  if (removed > 0) logger.info({ event: 'results_purged', removed });
+  return removed;
+}
+
+function listHistory(tenantId) {
+  ensureDir();
+  const prefix = `${tenantId}_`;
+  return fs.readdirSync(RESULTS_DIR)
+    .filter((file) => file.startsWith(prefix) && file.endsWith('.json'))
+    .map((file) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(RESULTS_DIR, file), 'utf8'));
+      } catch {
+        return null;
+      }
+    })
+    .filter((data) => data?.assessedAt)
+    .map((data) => ({
+      assessedAt: data.assessedAt,
+      overallScore: data.overallScore ?? null,
+      baseline: data.domains?.baseline?.domainScore ?? null,
+      entraId: data.domains?.entraId?.domainScore ?? null,
+      sharePoint: data.domains?.sharePoint?.domainScore ?? null,
+      governance: data.domains?.governance?.domainScore ?? null,
+      emailSecurity: data.domains?.emailSecurity?.domainScore ?? null,
+      teams: data.domains?.teams?.domainScore ?? null,
+      iaReadiness: data.domains?.iaReadiness?.domainScore ?? null,
+    }))
+    .sort((a, b) => String(a.assessedAt).localeCompare(String(b.assessedAt)));
+}
+
 function save(tenantId, result) {
+  purgeExpired();
   ensureDir();
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const file = path.join(RESULTS_DIR, `${tenantId}_${ts}.json`);
@@ -72,4 +116,4 @@ function deleteAllForTenant(tenantId) {
   return files.length;
 }
 
-module.exports = { save, getLatest, listLatestAll, deleteAllForTenant };
+module.exports = { save, getLatest, listLatestAll, listHistory, deleteAllForTenant, purgeExpired, RETENTION_MS };
