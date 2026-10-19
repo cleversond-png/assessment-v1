@@ -4,7 +4,8 @@
   "scripts": {
     "install:all": "npm install --prefix backend && npm install --prefix frontend",
     "build": "npm run --prefix frontend build",
-    "start": "node backend/src/server.js"
+    "start": "node backend/src/server.js",
+    "test": "npm test --prefix backend"
   },
   "engines": {
     "node": ">=20"

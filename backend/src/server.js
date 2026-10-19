@@ -45,20 +45,24 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-app.listen(serverConfig.port, async () => {
-  logger.info({ event: 'server_started', port: serverConfig.port });
+if (require.main === module) {
+  app.listen(serverConfig.port, async () => {
+    logger.info({ event: 'server_started', port: serverConfig.port });
 
-  // Re-acquire tokens for all previously consented tenants (client_credentials — no user interaction needed)
-  const tenants = consentStore.listTenants();
-  if (tenants.length > 0) {
-    logger.info({ event: 'restoring_tokens', count: tenants.length });
-    for (const { tenantId } of tenants) {
-      try {
-        await acquireTokenForTenant(tenantId);
-        logger.info({ event: 'token_restored', tenantId });
-      } catch (err) {
-        logger.error({ event: 'token_restore_failed', tenantId, error: err.message });
+    // Re-acquire tokens for all previously consented tenants (client_credentials — no user interaction needed)
+    const tenants = consentStore.listTenants();
+    if (tenants.length > 0) {
+      logger.info({ event: 'restoring_tokens', count: tenants.length });
+      for (const { tenantId } of tenants) {
+        try {
+          await acquireTokenForTenant(tenantId);
+          logger.info({ event: 'token_restored', tenantId });
+        } catch (err) {
+          logger.error({ event: 'token_restore_failed', tenantId, error: err.message });
+        }
       }
     }
-  }
-});
+  });
+}
+
+module.exports = { app };
