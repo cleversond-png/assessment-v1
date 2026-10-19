@@ -1,15 +1,31 @@
-const { graphGetAll, graphGet } = require('../../graph/graphClient');
+const axios = require('axios');
+const { graphGet, graphGetAll, graphGetReportCsv } = require('../../graph/graphClient');
+const tokenStore = require('../../auth/tokenStore');
 const logger = require('../../logger');
+const {
+  REPORT_SITE_LIMIT,
+  parseSiteUsageCsv,
+  selectSitesForFileSample,
+  sitePathFromUrl,
+  buildReportCoverage,
+  buildSearchCoverage,
+} = require('./fileSample');
 
-// Requires: Sites.Read.All
-// Samples the top N sites by storage and enumerates drive items (metadata only —
-// no file content is read). Detects: large files (>100MB), stale files (>12 months),
-// and duplicate files (by quickXorHash, then by name+size).
+// Ranking: Reports.Read.All via getSharePointSiteUsageDetail.
+// File metadata: Sites.Read.All and Files.Read.All. No file body is requested.
 const LARGE_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const STALE_FILE_MONTHS = 12;
-const SITES_TO_SAMPLE = 5;
-const ITEMS_PER_SITE_LIMIT = 1000;
-const QUOTA_SAMPLE_CAP = 200; // max sites to fetch drive quota for (prevents rate-limit storms)
+const REPORT_ITEMS_PER_SITE = 2000;
+const REPORT_ITEMS_TOTAL = 20000;
+const SEARCH_SITES = 5;
+const SEARCH_ITEMS_PER_SITE = 1000;
+const QUOTA_SAMPLE_CAP = 200;
+
+const ITEM_SELECT = 'name,size,file,lastModifiedDateTime,parentReference,webUrl,shared';
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function getSitesByStorage(tenantId) {
   const sites = await graphGetAll(tenantId, '/sites', {
@@ -17,10 +33,7 @@ async function getSitesByStorage(tenantId) {
     $select: 'id,displayName,webUrl',
   });
 
-  // Cap before parallelizing to avoid overwhelming the Graph API with 1000+ concurrent requests
   const siteSample = sites.slice(0, QUOTA_SAMPLE_CAP);
-
-  // Fetch drive quota in parallel (bounded by QUOTA_SAMPLE_CAP)
   const withQuota = await Promise.allSettled(
     siteSample.map(async (site) => {
       try {
@@ -36,57 +49,158 @@ async function getSitesByStorage(tenantId) {
     .filter((r) => r.status === 'fulfilled' && r.value.driveId)
     .map((r) => r.value)
     .sort((a, b) => b.storageBytes - a.storageBytes)
-    .slice(0, SITES_TO_SAMPLE);
+    .slice(0, SEARCH_SITES);
 }
 
-async function enumerateDriveItems(tenantId, driveId) {
-  // delta without token returns all current items recursively (metadata only)
+async function resolveRankedSites(tenantId, ranked) {
+  const sites = [];
+  let skipped = 0;
+  for (const row of ranked) {
+    const path = sitePathFromUrl(row.siteUrl);
+    if (!path) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const site = await graphGet(tenantId, path, { $select: 'id,displayName,webUrl' });
+      const drive = await graphGet(tenantId, `/sites/${site.id}/drive`, { $select: 'id' });
+      if (!site?.id || !drive?.id) {
+        skipped += 1;
+        continue;
+      }
+      sites.push({
+        id: site.id,
+        displayName: site.displayName,
+        driveId: drive.id,
+        storageBytes: row.storageUsed,
+      });
+    } catch (err) {
+      if (err.response?.status === 403 || err.response?.status === 404) {
+        skipped += 1;
+        continue;
+      }
+      throw err;
+    }
+  }
+  return { sites, skipped };
+}
+
+async function enumerateDriveItems(tenantId, driveId, itemCap) {
   const allItems = [];
   let nextUrl = null;
-  let count = 0;
+  let truncated = false;
+  let rateRetries = 3;
 
   try {
-    // First page via graphGetAll would lose URL control — use manual pagination
     const firstPage = await graphGet(
       tenantId,
       `/drives/${driveId}/root/delta`,
-      { $select: 'name,size,file,lastModifiedDateTime,parentReference,webUrl,shared' }
+      { $select: ITEM_SELECT }
     );
     const items = firstPage.value ?? [];
-    allItems.push(...items);
-    count += items.length;
-    nextUrl = firstPage['@odata.nextLink'] ?? firstPage['@odata.deltaLink'] ?? null;
-    // deltaLink = end of first sync; nextLink = more pages available
-    if (firstPage['@odata.deltaLink']) nextUrl = null; // single page — done
+    const room = Math.max(itemCap - allItems.length, 0);
+    if (items.length > room) {
+      allItems.push(...items.slice(0, room));
+      truncated = true;
+    } else {
+      allItems.push(...items);
+      nextUrl = firstPage['@odata.nextLink'] ?? null;
+      if (firstPage['@odata.deltaLink']) nextUrl = null;
+    }
 
-    // Continue pagination if needed, up to the item limit
-    const axios = require('axios');
-    const tokenStore = require('../../auth/tokenStore');
-    while (nextUrl && count < ITEMS_PER_SITE_LIMIT) {
+    while (nextUrl && allItems.length < itemCap) {
       const entry = tokenStore.getToken(tenantId);
       if (!entry) break;
-      const res = await axios.get(nextUrl, {
-        headers: { Authorization: `Bearer ${entry.accessToken}` },
-      });
-      const pageItems = res.data.value ?? [];
-      allItems.push(...pageItems);
-      count += pageItems.length;
-      nextUrl = res.data['@odata.nextLink'] ?? null;
+      try {
+        const res = await axios.get(nextUrl, {
+          headers: { Authorization: `Bearer ${entry.accessToken}` },
+          timeout: 30000,
+        });
+        const pageItems = res.data.value ?? [];
+        const pageRoom = itemCap - allItems.length;
+        if (pageItems.length > pageRoom) {
+          allItems.push(...pageItems.slice(0, pageRoom));
+          truncated = true;
+          nextUrl = null;
+        } else {
+          allItems.push(...pageItems);
+          nextUrl = res.data['@odata.nextLink'] ?? null;
+        }
+        rateRetries = 3;
+      } catch (err) {
+        if (err.response?.status === 429 && rateRetries > 0) {
+          rateRetries -= 1;
+          const wait = parseInt(err.response.headers['retry-after'] || '10', 10) * 1000;
+          logger.warn({ event: 'rate_limited', path: 'drive_delta', waitMs: wait });
+          await sleep(wait);
+          continue;
+        }
+        throw err;
+      }
     }
+    if (nextUrl) truncated = true;
   } catch (err) {
+    truncated = true;
     logger.warn({ event: 'files_drive_enum_failed', driveId, error: err.message });
   }
 
-  // Filter to files only (exclude folders and deleted items)
-  return allItems.filter((item) => item.file && !item.deleted);
+  return {
+    items: allItems.filter((item) => item.file && !item.deleted),
+    truncated,
+    fetched: allItems.length,
+  };
+}
+
+async function loadSample(tenantId) {
+  let selected;
+  try {
+    const csv = await graphGetReportCsv(
+      tenantId,
+      "/reports/getSharePointSiteUsageDetail(period='D7')"
+    );
+    const rows = parseSiteUsageCsv(csv);
+    if (!rows) {
+      const error = new Error('CSV do relatório de sites sem as colunas esperadas');
+      error.reportUnusable = true;
+      throw error;
+    }
+    selected = selectSitesForFileSample(rows, REPORT_SITE_LIMIT);
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 403 || status === 404 || err.reportUnusable) {
+      logger.warn({ event: 'files_report_unavailable', tenantId, status: status || 'csv' });
+      const sites = await getSitesByStorage(tenantId);
+      return {
+        sites,
+        itemCap: SEARCH_ITEMS_PER_SITE,
+        totalCap: SEARCH_ITEMS_PER_SITE * SEARCH_SITES,
+        meta: { source: 'search' },
+      };
+    }
+    throw err;
+  }
+
+  const { sites, skipped } = await resolveRankedSites(tenantId, selected.sites);
+  return {
+    sites,
+    itemCap: REPORT_ITEMS_PER_SITE,
+    totalCap: REPORT_ITEMS_TOTAL,
+    meta: {
+      source: 'report',
+      sharePointSites: selected.sharePointSites,
+      oneDriveSites: selected.oneDriveSites,
+      oneDriveStorageBytes: selected.oneDriveStorageBytes,
+      skipped,
+    },
+  };
 }
 
 async function collectFiles(tenantId) {
   logger.info({ event: 'collector_start', collector: 'files', tenantId });
 
-  let topSites;
+  let sample;
   try {
-    topSites = await getSitesByStorage(tenantId);
+    sample = await loadSample(tenantId);
   } catch (err) {
     if (err.response?.status === 403 || err.response?.status === 404) {
       logger.warn({ event: 'collector_unavailable', collector: 'files', tenantId });
@@ -100,11 +214,22 @@ async function collectFiles(tenantId) {
     throw err;
   }
 
+  const { sites: topSites, itemCap, totalCap, meta } = sample;
+
   if (topSites.length === 0) {
+    const coverage = meta.source === 'report'
+      ? buildReportCoverage({ ...meta, opened: 0, filesRead: 0, truncated: 0, notOpened: 0, totalCap })
+      : buildSearchCoverage({ opened: 0, itemCap, truncated: 0 });
     return {
       collector: 'files',
       score: 5,
-      summary: { message: 'No sites with accessible drives found.' },
+      summary: {
+        message: 'No sites with accessible drives found.',
+        coverage,
+        rankingSource: meta.source,
+        oneDriveSitesExcluded: meta.oneDriveSites || 0,
+        oneDriveStorageBytes: meta.oneDriveStorageBytes || 0,
+      },
       largeFiles: [],
       duplicates: [],
       staleFiles: [],
@@ -116,14 +241,27 @@ async function collectFiles(tenantId) {
 
   const largeFiles = [];
   const staleFiles = [];
-  const hashMap = new Map();  // hash → [{name, size, webUrl, site}]
-  const nameSizeMap = new Map(); // "name|size" → [{webUrl, site}]
+  const hashMap = new Map();
+  const nameSizeMap = new Map();
   let totalFilesScanned = 0;
   let sharedFilesCount = 0;
   let anonymousSharedCount = 0;
+  let remaining = totalCap;
+  let truncatedSites = 0;
+  let opened = 0;
+  let notOpened = 0;
 
   for (const site of topSites) {
-    const items = await enumerateDriveItems(tenantId, site.driveId);
+    if (remaining <= 0) {
+      notOpened += 1;
+      continue;
+    }
+    const cap = Math.min(itemCap, remaining);
+    const page = await enumerateDriveItems(tenantId, site.driveId, cap);
+    opened += 1;
+    remaining -= page.fetched;
+    if (page.truncated) truncatedSites += 1;
+    const items = page.items;
     totalFilesScanned += items.length;
 
     for (const item of items) {
@@ -133,29 +271,24 @@ async function collectFiles(tenantId) {
         : 0;
       const ref = { name: item.name, sizeBytes, webUrl: item.webUrl, site: site.displayName };
 
-      // Explicit sharing (link created or permission granted on this item)
       if (item.shared) {
         sharedFilesCount++;
         if (item.shared.scope === 'anonymous') anonymousSharedCount++;
       }
 
-      // Large files
       if (sizeBytes > LARGE_FILE_BYTES) {
         largeFiles.push({ ...ref, lastModifiedDateTime: item.lastModifiedDateTime });
       }
 
-      // Stale files
       if (lastMod && now - lastMod > staleMs) {
         staleFiles.push({ ...ref, lastModifiedDateTime: item.lastModifiedDateTime });
       }
 
-      // Duplicate detection by hash (quickXorHash = server-computed, no content read)
       const hash = item.file?.hashes?.quickXorHash;
       if (hash) {
         if (!hashMap.has(hash)) hashMap.set(hash, []);
         hashMap.get(hash).push(ref);
       } else {
-        // Fallback: group by name+size
         const key = `${item.name}|${sizeBytes}`;
         if (!nameSizeMap.has(key)) nameSizeMap.set(key, []);
         nameSizeMap.get(key).push(ref);
@@ -163,7 +296,6 @@ async function collectFiles(tenantId) {
     }
   }
 
-  // Build duplicate groups (hash-based)
   const duplicateGroups = [];
   for (const [, copies] of hashMap) {
     if (copies.length > 1) {
@@ -171,7 +303,6 @@ async function collectFiles(tenantId) {
       duplicateGroups.push({ copies: copies.length, wastedBytes: wasted, files: copies });
     }
   }
-  // Name+size fallback duplicates (may have false positives — noted in summary)
   for (const [, copies] of nameSizeMap) {
     if (copies.length > 1) {
       const wasted = copies[0].sizeBytes * (copies.length - 1);
@@ -182,14 +313,11 @@ async function collectFiles(tenantId) {
 
   const totalWastedBytes = duplicateGroups.reduce((s, g) => s + g.wastedBytes, 0);
 
-  // Sort large files by size desc, stale by age desc
   largeFiles.sort((a, b) => b.sizeBytes - a.sizeBytes);
   staleFiles.sort((a, b) => new Date(a.lastModifiedDateTime) - new Date(b.lastModifiedDateTime));
 
-  // Scoring: deductions for each risk dimension
   let score = 5;
   const staleRatio = totalFilesScanned > 0 ? staleFiles.length / totalFilesScanned : 0;
-  const largeRatio = totalFilesScanned > 0 ? largeFiles.length / totalFilesScanned : 0;
   const dupRatio = totalFilesScanned > 0
     ? duplicateGroups.reduce((s, g) => s + g.copies - 1, 0) / totalFilesScanned
     : 0;
@@ -208,18 +336,30 @@ async function collectFiles(tenantId) {
 
   score = Math.max(Math.round(score * 10) / 10, 0);
 
+  const coverage = meta.source === 'report'
+    ? buildReportCoverage({
+      ...meta,
+      opened,
+      filesRead: totalFilesScanned,
+      truncated: truncatedSites,
+      notOpened,
+      totalCap,
+    })
+    : buildSearchCoverage({ opened, itemCap, truncated: truncatedSites });
+
   logger.info({
     event: 'collector_done', collector: 'files', tenantId,
-    sitesSampled: topSites.length, totalFilesScanned,
+    sitesSampled: opened, totalFilesScanned,
     largeFiles: largeFiles.length, duplicateGroups: duplicateGroups.length,
-    staleFiles: staleFiles.length, score,
+    staleFiles: staleFiles.length, score, rankingSource: meta.source,
   });
 
   return {
     collector: 'files',
     score,
     summary: {
-      sitesSampled: topSites.length,
+      sitesSampled: opened,
+      sharePointSites: meta.sharePointSites,
       totalFilesScanned,
       sharedFilesCount,
       anonymousSharedCount,
@@ -231,7 +371,11 @@ async function collectFiles(tenantId) {
       staleFilesRatioPercent: Math.round(staleRatio * 100),
       largeFileThresholdMB: 100,
       stalePeriodMonths: STALE_FILE_MONTHS,
-      coverage: `Top ${topSites.length} sites by storage (up to ${ITEMS_PER_SITE_LIMIT} items/site)`,
+      sitesTruncated: truncatedSites,
+      rankingSource: meta.source,
+      oneDriveSitesExcluded: meta.oneDriveSites || 0,
+      oneDriveStorageBytes: meta.oneDriveStorageBytes || 0,
+      coverage,
     },
     largeFiles: largeFiles.slice(0, 20),
     duplicates: duplicateGroups.slice(0, 20),

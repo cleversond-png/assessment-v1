@@ -41,7 +41,7 @@ const COLLECTOR_META = {
     description: 'Sites com permissão explícita para "Everyone" — acesso automático a todos no tenant. O Copilot amplifica isso ao indexar e citar esse conteúdo para qualquer usuário.' },
   staleContent:      { label: 'Conteúdo Obsoleto',       weight: 2, requires: 'Sites.Read.All',
     description: 'Sites sem atividade nos últimos 180 dias. Conteúdo obsoleto pode ser citado pelo Copilot como informação atual, gerando respostas imprecisas.' },
-  files:             { label: 'Arquivos (grandes/dupl)', weight: 2, requires: 'Sites.Read.All, Files.Read.All',
+  files:             { label: 'Arquivos (grandes/dupl)', weight: 2, requires: 'Reports.Read.All, Sites.Read.All, Files.Read.All',
     description: 'Arquivos excepcionalmente grandes (>100 MB) que impactam performance de sincronização e podem indicar repositórios de dados não gerenciados.' },
   storage:           { label: 'Armazenamento',           weight: 2, requires: 'Sites.Read.All',
     description: 'Percentual de utilização do armazenamento SharePoint total alocado para o tenant.' },
@@ -354,9 +354,6 @@ function FilesDetailContent({ data }) {
               </div>
             ))}
           </div>
-          {s.coverage && (
-            <div className="t-xs" style={{ color: 'var(--fg-3)', marginTop: 6 }}>Cobertura: {s.coverage}</div>
-          )}
         </div>
       )}
 
@@ -380,6 +377,10 @@ function FilesDetailContent({ data }) {
             ))}
           </div>
         </div>
+      )}
+
+      {s.coverage && (
+        <div className="t-xs" style={{ color: 'var(--fg-3)' }}>Cobertura: {s.coverage}</div>
       )}
     </div>
   )

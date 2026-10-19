@@ -96,4 +96,54 @@ async function graphGetBeta(tenantId, path, params = {}, retries = 3) {
   }
 }
 
-module.exports = { graphGet, graphGetAll, graphGetBeta };
+// Usage reports answer 302 with a preauthenticated file URL.
+// The Graph token stays on the first request and is not sent to that host.
+async function graphGetReportCsv(tenantId, path, retries = 3) {
+  try {
+    const res = await axios.get(`${GRAPH_BASE}${path}`, {
+      headers: getAuthHeader(tenantId),
+      maxRedirects: 0,
+      timeout: 30000,
+      validateStatus: (status) => status === 200 || status === 302,
+      responseType: 'text',
+      transformResponse: [(data) => data],
+    });
+    if (res.status === 302) {
+      const location = res.headers.location;
+      if (!location || !/^https:\/\//i.test(location)) {
+        const error = new Error('Redirect do relatório sem URL https');
+        error.reportUnusable = true;
+        throw error;
+      }
+      try {
+        const file = await axios.get(location, {
+          timeout: 60000,
+          responseType: 'text',
+          transformResponse: [(data) => data],
+          maxRedirects: 5,
+        });
+        return file.data;
+      } catch (err) {
+        err.reportUnusable = true;
+        throw err;
+      }
+    }
+    return res.data;
+  } catch (err) {
+    if (err.reportUnusable) {
+      logger.warn({ event: 'report_download_failed', path });
+      throw err;
+    }
+    if (err.response?.status === 429 && retries > 0) {
+      const wait = parseInt(err.response.headers['retry-after'] || '10', 10) * 1000;
+      logger.warn({ event: 'rate_limited', path, waitMs: wait });
+      await sleep(wait);
+      return graphGetReportCsv(tenantId, path, retries - 1);
+    }
+    const detail = err.response?.data?.error || err.message;
+    logger.error({ event: 'graph_error', path, detail });
+    throw err;
+  }
+}
+
+module.exports = { graphGet, graphGetAll, graphGetBeta, graphGetReportCsv };

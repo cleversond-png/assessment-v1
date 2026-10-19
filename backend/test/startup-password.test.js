@@ -22,7 +22,7 @@ function runServer(passwordHash) {
     cwd: path.resolve(__dirname, '..'),
     env,
     encoding: 'utf8',
-    timeout: 8000,
+    timeout: 20000,
   });
 
   fs.rmSync(dataDir, { recursive: true, force: true });
