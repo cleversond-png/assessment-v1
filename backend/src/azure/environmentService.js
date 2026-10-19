@@ -14,6 +14,10 @@ const subscriptionId = process.env.AZURE_SUBSCRIPTION_ID || process.env.AZURE_EN
 const currentSiteName = process.env.WEBSITE_SITE_NAME || null;
 const allowSelfStop = process.env.AZURE_ENV_ALLOW_SELF_STOP === 'true';
 
+function isEnvironmentControlAllowed() {
+  return process.env.AZURE_ENV_ALLOW_CONTROL === 'true';
+}
+
 const ENVIRONMENTS = [
   {
     id: 'assessment',
@@ -115,8 +119,8 @@ function normalizeResource(resource, stateById = {}) {
     state,
     selfHosted,
     startStopCapable: isStartStopCapable(resource),
-    canStart: isStartStopCapable(resource) && stopped && !blockedSelfStop,
-    canStop: isStartStopCapable(resource) && running && !blockedSelfStop,
+    canStart: isEnvironmentControlAllowed() && isStartStopCapable(resource) && stopped && !blockedSelfStop,
+    canStop: isEnvironmentControlAllowed() && isStartStopCapable(resource) && running && !blockedSelfStop,
   };
 }
 
@@ -247,6 +251,11 @@ async function listEnvironments() {
 }
 
 async function controlResource(environmentId, resourceName, action) {
+  if (!isEnvironmentControlAllowed()) {
+    const error = new Error('Start/stop desativado.');
+    error.statusCode = 403;
+    throw error;
+  }
   if (!['start', 'stop'].includes(action)) throw new Error('Invalid action');
   const resources = await listEnvironmentResources(environmentId);
   const target = resources.resources.find((resource) => (
@@ -279,4 +288,5 @@ module.exports = {
   listEnvironmentResources,
   getEnvironmentBilling,
   controlResource,
+  isEnvironmentControlAllowed,
 };
