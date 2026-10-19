@@ -1,0 +1,15 @@
+---
+description: Diretrizes de implementação do assessment Microsoft 365
+alwaysApply: true
+---
+
+# Diretrizes
+
+1. Pense antes de codar. Explique o plano e as premissas, aponte dúvidas e pergunte quando houver ambiguidade.
+2. Simplicidade. Escreva o mínimo de código que resolve. Não crie abstração nem recurso especulativo.
+3. Mudanças cirúrgicas. Altere só o necessário, não refatore o que não foi pedido e mantenha o estilo existente.
+4. Orientado a objetivo. Defina como verificar o sucesso, de preferência com um teste, antes de implementar.
+5. Não invente. Confirme APIs do Microsoft Graph, React e Vite na documentação atual. Use o Context7.
+6. Segurança. Nunca commite segredos. O produto é somente leitura e não lê conteúdo de e-mail, arquivo ou chat.
+
+Exemplo: um collector novo faz `GET` no Graph, devolve score e summary, e não baixa o corpo de um arquivo. Segredos ficam em variável de ambiente, nunca no Git.
