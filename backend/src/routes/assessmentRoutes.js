@@ -13,6 +13,7 @@ const consentStore = require('../store/consentStore');
 const { acquireTokenForTenant } = require('../auth/authService');
 const resultsStore = require('../store/resultsStore');
 const jobStore = require('../store/jobStore');
+const { calculateOverallScore } = require('../scoring/overallScore');
 const logger = require('../logger');
 
 const router = express.Router();
@@ -81,13 +82,7 @@ async function runAssessmentBackground(tenantId) {
     }));
 
     domainResults.iaReadiness = assessIAReadiness(tenantId, domainResults);
-
-    const scores = Object.values(domainResults)
-      .map((d) => d.domainScore)
-      .filter((s) => typeof s === 'number');
-    const overallScore = scores.length > 0
-      ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10
-      : null;
+    const overallScore = calculateOverallScore(domainResults);
 
     const missingPermissions = detectMissingPermissions(domainResults);
 
