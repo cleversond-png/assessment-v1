@@ -5,6 +5,41 @@ const COOKIE_NAME = 'bb_assessment_session';
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 const sessions = new Map();
+const FAILURE_LIMIT = 5;
+const FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const loginFailures = new Map();
+
+function clientKey(req) {
+  return req.ip || 'unknown';
+}
+
+function currentFailures(req) {
+  const key = clientKey(req);
+  const entry = loginFailures.get(key);
+  if (!entry || entry.resetAt <= Date.now()) {
+    loginFailures.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function loginLimited(req) {
+  const entry = currentFailures(req);
+  return Boolean(entry && entry.count >= FAILURE_LIMIT);
+}
+
+function recordLoginFailure(req) {
+  const entry = currentFailures(req);
+  if (!entry) {
+    loginFailures.set(clientKey(req), { count: 1, resetAt: Date.now() + FAILURE_WINDOW_MS });
+    return;
+  }
+  entry.count += 1;
+}
+
+function clearLoginFailures(req) {
+  loginFailures.delete(clientKey(req));
+}
 
 function parseCookies(header = '') {
   const cookies = {};
@@ -84,14 +119,21 @@ function sessionHandler(req, res) {
 }
 
 function loginHandler(req, res) {
+  if (loginLimited(req)) {
+    return res.status(429).json({ error: 'Muitas tentativas. Tente mais tarde.' });
+  }
+
   const { username, password } = req.body || {};
   const configuredUsername = getConfiguredUsername();
   const usernameOk = String(username || '') === configuredUsername;
   const passwordOk = verifyPassword(password, getConfiguredPasswordHash());
 
   if (!usernameOk || !passwordOk) {
+    recordLoginFailure(req);
     return res.status(401).json({ error: 'Usuário ou senha inválidos.' });
   }
+
+  clearLoginFailures(req);
 
   const token = crypto.randomBytes(32).toString('base64url');
   sessions.set(token, {
