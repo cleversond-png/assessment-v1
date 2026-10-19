@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 
 const DEFAULT_USERNAME = 'Admin.Assessment';
-const DEFAULT_PASSWORD_HASH = 'pbkdf2:210000:015fea5275b7800be408d588f1da5502:2a13d0a2407b5ada3166d203bed059e418a07e52b6cf7a94b19f0ad3c7e29b4b';
 const COOKIE_NAME = 'bb_assessment_session';
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
@@ -42,7 +41,7 @@ function getConfiguredUsername() {
 }
 
 function getConfiguredPasswordHash() {
-  return process.env.PORTAL_ADMIN_PASSWORD_HASH || DEFAULT_PASSWORD_HASH;
+  return process.env.PORTAL_ADMIN_PASSWORD_HASH || '';
 }
 
 function verifyPassword(password, storedHash) {
